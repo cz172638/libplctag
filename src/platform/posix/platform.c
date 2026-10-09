@@ -71,6 +71,22 @@
 #endif
 
 
+#if defined(__ZEPHYR__)
+/*
+ * Zephyr RTOS: built on top of CONFIG_POSIX_API (pthreads, BSD sockets,
+ * select(), fcntl(), socketpair()).  There are no signals, so MSG_NOSIGNAL
+ * is meaningless, and thread stacks are explicit, so the stacksize argument
+ * of thread_create() is honoured (CONFIG_LIBPLCTAG_THREAD_STACK_SIZE
+ * overrides it when non-zero).
+ */
+#    include <sys/select.h>
+#    include <zephyr/kernel.h>
+#    ifndef MSG_NOSIGNAL
+#        define MSG_NOSIGNAL (0)
+#    endif
+#endif
+
+
 /***************************************************************************
  ******************************* Memory ************************************
  **************************************************************************/
@@ -611,6 +627,97 @@ char *str_concat_impl(int num_args, ...) {
  ******************************* Mutexes ***********************************
  **************************************************************************/
 
+#if defined(__ZEPHYR__)
+/*
+ * Zephyr: use kernel objects embedded in the heap-allocated wrapper instead
+ * of pthread mutexes, which come from a small static pool
+ * (CONFIG_MAX_PTHREAD_MUTEX_COUNT).  k_mutex is recursive by design, which
+ * matches the PTHREAD_MUTEX_RECURSIVE semantics used on other POSIX systems.
+ */
+
+struct mutex_t {
+    struct k_mutex k_mutex;
+    int initialized;
+};
+
+int mutex_create(mutex_p *m) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_DETAIL, 0, "Starting.");
+
+    if(!m) { return PLCTAG_ERR_NULL_PTR; }
+
+    if(*m) { pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "Called with non-NULL pointer!"); }
+
+    *m = (struct mutex_t *)mem_alloc(sizeof(struct mutex_t));
+    if(!*m) {
+        pdebug(DEBUG_MODULE_PLATFORM, DEBUG_ERROR, 0, "null mutex pointer.");
+        return PLCTAG_ERR_NULL_PTR;
+    }
+
+    k_mutex_init(&((*m)->k_mutex));
+    (*m)->initialized = 1;
+
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_DETAIL, 0, "Done creating mutex %p.", *m);
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int mutex_lock_impl(const char *func, int line, mutex_p m) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "locking mutex %p, called from %s:%d.", m, func, line);
+
+    if(!m) { return PLCTAG_ERR_NULL_PTR; }
+    if(!m->initialized) { return PLCTAG_ERR_MUTEX_INIT; }
+
+    if(k_mutex_lock(&(m->k_mutex), K_FOREVER)) {
+        pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "error locking mutex.");
+        return PLCTAG_ERR_MUTEX_LOCK;
+    }
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int mutex_try_lock_impl(const char *func, int line, mutex_p m) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "trying to lock mutex %p, called from %s:%d.", m, func, line);
+
+    if(!m) { return PLCTAG_ERR_NULL_PTR; }
+    if(!m->initialized) { return PLCTAG_ERR_MUTEX_INIT; }
+
+    if(k_mutex_lock(&(m->k_mutex), K_NO_WAIT)) { return PLCTAG_ERR_MUTEX_LOCK; }
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int mutex_unlock_impl(const char *func, int line, mutex_p m) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "unlocking mutex %p, called from %s:%d.", m, func, line);
+
+    if(!m) { return PLCTAG_ERR_NULL_PTR; }
+    if(!m->initialized) { return PLCTAG_ERR_MUTEX_INIT; }
+
+    if(k_mutex_unlock(&(m->k_mutex))) {
+        pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "error unlocking mutex.");
+        return PLCTAG_ERR_MUTEX_UNLOCK;
+    }
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int mutex_destroy(mutex_p *m) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_DETAIL, 0, "Starting to destroy mutex %p.", m);
+
+    if(!m || !*m) { return PLCTAG_ERR_NULL_PTR; }
+
+    /* k_mutex needs no teardown */
+    mem_free(*m);
+    *m = NULL;
+
+    return PLCTAG_STATUS_OK;
+}
+
+#else /* !__ZEPHYR__ */
+
 struct mutex_t {
     pthread_mutex_t p_mutex;
     int initialized;
@@ -735,6 +842,8 @@ int mutex_destroy(mutex_p *m) {
     return PLCTAG_STATUS_OK;
 }
 
+#endif /* __ZEPHYR__ */
+
 
 /***************************************************************************
  ******************************* Threads ***********************************
@@ -743,6 +852,11 @@ int mutex_destroy(mutex_p *m) {
 struct thread_t {
     pthread_t p_thread;
     int initialized;
+#if defined(__ZEPHYR__)
+    /* Zephyr ties the dynamically allocated stack to the attr object: it must outlive the thread. */
+    pthread_attr_t attr;
+    int attr_valid;
+#endif
 };
 
 /*
@@ -771,11 +885,44 @@ extern int thread_create(thread_p *t, thread_func_t func, int stacksize, void *a
         return PLCTAG_ERR_NULL_PTR;
     }
 
+#if defined(__ZEPHYR__)
+    {
+        pthread_attr_t *attr = &((*t)->attr);
+        size_t zstack = (size_t)stacksize;
+        int prc;
+
+#    if CONFIG_LIBPLCTAG_THREAD_STACK_SIZE > 0
+        zstack = (size_t)CONFIG_LIBPLCTAG_THREAD_STACK_SIZE;
+#    endif
+
+        if(pthread_attr_init(attr)) {
+            mem_free(*t);
+            *t = NULL;
+            return PLCTAG_ERR_THREAD_CREATE;
+        }
+
+        /* stack is allocated dynamically (CONFIG_DYNAMIC_THREAD) and owned by attr */
+        pthread_attr_setstacksize(attr, zstack);
+
+        prc = pthread_create(&((*t)->p_thread), attr, func, arg);
+
+        if(prc) {
+            pthread_attr_destroy(attr);
+            pdebug(DEBUG_MODULE_PLATFORM, DEBUG_ERROR, 0, "error %d creating thread with %u byte stack.", prc, (unsigned)zstack);
+            mem_free(*t);
+            *t = NULL;
+            return PLCTAG_ERR_THREAD_CREATE;
+        }
+
+        (*t)->attr_valid = 1;
+    }
+#else
     /* create a pthread.  0 means success. */
     if(pthread_create(&((*t)->p_thread), NULL, func, arg)) {
         pdebug(DEBUG_MODULE_PLATFORM, DEBUG_ERROR, 0, "error creating thread.");
         return PLCTAG_ERR_THREAD_CREATE;
     }
+#endif
 
     pdebug(DEBUG_MODULE_PLATFORM, DEBUG_DETAIL, 0, "Done.");
 
@@ -826,7 +973,7 @@ int thread_join(thread_p t) {
         return PLCTAG_ERR_NULL_PTR;
     }
 
-    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_INFO, 0, "About to join thread %p.", (void *)t->p_thread);
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_INFO, 0, "About to join thread %p.", (void *)(uintptr_t)t->p_thread);
     join_start_time = time_ms();
 
     join_result = pthread_join(t->p_thread, &unused);
@@ -871,6 +1018,14 @@ extern int thread_destroy(thread_p *t) {
         pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "null thread pointer.");
         return PLCTAG_ERR_NULL_PTR;
     }
+
+#if defined(__ZEPHYR__)
+    /* the thread is dead (joined) by now, so its stack can be released */
+    if((*t)->attr_valid) {
+        pthread_attr_destroy(&((*t)->attr));
+        (*t)->attr_valid = 0;
+    }
+#endif
 
     mem_free(*t);
 
@@ -942,6 +1097,123 @@ extern void lock_release(lock_t *lock) {
 /***************************************************************************
  ************************* Condition Variables *****************************
  ***************************************************************************/
+
+#if defined(__ZEPHYR__)
+/*
+ * Zephyr: k_mutex + k_condvar instead of the pthread pool objects
+ * (CONFIG_MAX_PTHREAD_COND_COUNT), with a relative timeout on the kernel
+ * uptime clock, so it is immune to wall clock changes (SNTP, PTP).
+ */
+
+struct cond_t {
+    struct k_mutex mutex;
+    struct k_condvar cond;
+    int flag;
+};
+
+int cond_create(cond_p *c) {
+    cond_p tmp_cond = NULL;
+
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_DETAIL, 0, "Starting.");
+
+    if(!c) { return PLCTAG_ERR_NULL_PTR; }
+
+    if(*c) { pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "Condition var pointer is not null, was it not deleted first?"); }
+
+    *c = NULL;
+
+    tmp_cond = mem_alloc((int)(unsigned int)sizeof(*tmp_cond));
+    if(!tmp_cond) {
+        pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "Unable to allocate new condition var!");
+        return PLCTAG_ERR_NO_MEM;
+    }
+
+    k_mutex_init(&(tmp_cond->mutex));
+    k_condvar_init(&(tmp_cond->cond));
+    tmp_cond->flag = 0;
+
+    *c = tmp_cond;
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int cond_wait_impl(const char *func, int line_num, cond_p c, int timeout_ms) {
+    int rc = PLCTAG_STATUS_OK;
+    int64_t end_time = k_uptime_get() + timeout_ms;
+
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "Starting. Called from %s:%d.", func, line_num);
+
+    if(!c) { return PLCTAG_ERR_NULL_PTR; }
+
+    if(timeout_ms <= 0) {
+        pdebug(DEBUG_MODULE_PLATFORM, DEBUG_WARN, 0, "Timeout must be a positive value but was %d in call from %s:%d!",
+               timeout_ms, func, line_num);
+        return PLCTAG_ERR_TIMEOUT;
+    }
+
+    k_mutex_lock(&(c->mutex), K_FOREVER);
+
+    while(!c->flag) {
+        int64_t time_left = end_time - k_uptime_get();
+
+        if(time_left <= 0) {
+            rc = PLCTAG_ERR_TIMEOUT;
+            break;
+        }
+
+        /* -EAGAIN on timeout; spurious wake-ups are handled by the loop */
+        (void)k_condvar_wait(&(c->cond), &(c->mutex), K_MSEC(time_left));
+    }
+
+    if(c->flag) {
+        c->flag = 0;
+        rc = PLCTAG_STATUS_OK;
+    }
+
+    k_mutex_unlock(&(c->mutex));
+
+    return rc;
+}
+
+
+int cond_signal_impl(const char *func, int line_num, cond_p c) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "Starting.  Called from %s:%d.", func, line_num);
+
+    if(!c) { return PLCTAG_ERR_NULL_PTR; }
+
+    k_mutex_lock(&(c->mutex), K_FOREVER);
+    c->flag = 1;
+    k_condvar_signal(&(c->cond));
+    k_mutex_unlock(&(c->mutex));
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int cond_clear_impl(const char *func, int line_num, cond_p c) {
+    pdebug(DEBUG_MODULE_PLATFORM, DEBUG_SPEW, 0, "Starting.  Called from %s:%d.", func, line_num);
+
+    if(!c) { return PLCTAG_ERR_NULL_PTR; }
+
+    k_mutex_lock(&(c->mutex), K_FOREVER);
+    c->flag = 0;
+    k_mutex_unlock(&(c->mutex));
+
+    return PLCTAG_STATUS_OK;
+}
+
+
+int cond_destroy(cond_p *c) {
+    if(!c || !*c) { return PLCTAG_ERR_NULL_PTR; }
+
+    mem_free(*c);
+    *c = NULL;
+
+    return PLCTAG_STATUS_OK;
+}
+
+#else /* !__ZEPHYR__ */
 
 struct cond_t {
     pthread_mutex_t mutex;
@@ -1170,6 +1442,8 @@ int cond_destroy(cond_p *c) {
 
     return rc;
 }
+
+#endif /* __ZEPHYR__ */
 
 
 /***************************************************************************
@@ -2371,9 +2645,14 @@ int sleep_ms(int ms) {
  * Return the current epoch time in milliseconds.
  */
 int64_t time_ms(void) {
+#if defined(__ZEPHYR__)
+    /* libplctag only uses this for intervals and timeouts: use the monotonic uptime */
+    return k_uptime_get();
+#else
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
 
     return ((int64_t)tv.tv_sec * 1000) + ((int64_t)tv.tv_usec / 1000);
+#endif
 }

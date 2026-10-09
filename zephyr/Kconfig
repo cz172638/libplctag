@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MPL-2.0 OR LGPL-2.0-or-later
+
+config LIBPLCTAG
+	bool "libplctag - EtherNet/IP (CIP), PCCC and Modbus TCP PLC tag library"
+	depends on NETWORKING
+	# libplctag uses __thread; native_sim gets it from the host toolchain
+	depends on ARCH_HAS_THREAD_LOCAL_STORAGE || ARCH_POSIX
+	select POSIX_API
+	select NET_SOCKETS
+	select NET_TCP
+	select NET_SOCKETPAIR
+	select THREAD_STACK_INFO
+	select DYNAMIC_THREAD
+	select DYNAMIC_THREAD_ALLOC
+	select THREAD_LOCAL_STORAGE if ARCH_HAS_THREAD_LOCAL_STORAGE
+	help
+	  Build libplctag (https://github.com/libplctag/libplctag) as a Zephyr
+	  library.  The library is compiled against its POSIX platform layer on
+	  top of CONFIG_POSIX_API: pthreads, BSD sockets, select() and a
+	  socketpair() per connection used to wake the I/O thread.
+
+	  The library spawns its own threads: one tag "tickler", one
+	  reference-count cleanup thread and one handler thread per PLC
+	  session/connection, all with dynamically allocated stacks.  Size
+	  CONFIG_HEAP_MEM_POOL_SIZE (stacks) and the libc malloc arena
+	  (tags, buffers) accordingly.
+
+if LIBPLCTAG
+
+config LIBPLCTAG_THREAD_STACK_SIZE
+	int "Stack size of libplctag internal threads"
+	default 16384
+	help
+	  Stack size in bytes of every thread created by libplctag.  Upstream
+	  requests 32 KiB per thread; on Zephyr that is overkill.  Set to 0 to
+	  use the size requested by the library.  libplctag's debug logging
+	  formats lines on the stack, so do not go much below 8 KiB when
+	  using debug levels above 1.
+
+config LIBPLCTAG_DEBUG_PRINTK
+	bool "Route libplctag debug output to printk()"
+	default y
+	help
+	  Install a logger callback on start-up so that libplctag debug
+	  output (set with plc_tag_set_debug_level() or the "debug=N" tag
+	  attribute) goes to printk() instead of buffered stderr.
+
+endif # LIBPLCTAG

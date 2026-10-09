@@ -49,6 +49,28 @@ uint64_t random_u64(uint64_t upper_bound) {
     return random_number;
 }
 
+#elif defined(__ZEPHYR__)
+#    include <zephyr/random/random.h>
+
+uint64_t random_u64(uint64_t upper_bound) {
+    uint64_t random_number = 0;
+
+    if(upper_bound == 0) { return 0; }
+
+    /* CSPRNG when an entropy driver is present, otherwise the kernel PRNG. */
+#    if defined(CONFIG_CSPRNG_ENABLED)
+    if(sys_csrand_get(&random_number, sizeof(random_number)) != 0) {
+        sys_rand_get(&random_number, sizeof(random_number));
+    }
+#    else
+    sys_rand_get(&random_number, sizeof(random_number));
+#    endif
+
+    random_number %= upper_bound;
+
+    return random_number;
+}
+
 #elif defined(__linux__)
 #    include <stdlib.h>
 #    include <sys/random.h>

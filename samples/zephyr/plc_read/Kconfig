@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MPL-2.0 OR LGPL-2.0-or-later
+
+mainmenu "libplctag plc_read sample"
+
+config PLC_READ_GATEWAY
+	string "PLC IP address"
+	default "192.168.1.10"
+
+config PLC_READ_PATH
+	string "CIP route path (backplane,slot)"
+	default "1,0"
+
+config PLC_READ_PLC_TYPE
+	string "libplctag plc= attribute"
+	default "ControlLogix"
+
+config PLC_READ_TAG_NAME
+	string "Tag to read"
+	default "TestDINTArray"
+
+config PLC_READ_ELEM_COUNT
+	int "Number of 32-bit elements"
+	default 10
+
+config PLC_READ_PERIOD_MS
+	int "Read period in milliseconds (0 = back-to-back)"
+	default 1000
+
+config PLC_READ_DEBUG
+	int "libplctag debug level (0-5)"
+	default 1
+
+config PLC_READ_TIMEOUT_MS
+	int "Per-operation timeout in milliseconds"
+	default 5000
+
+source "Kconfig.zephyr"

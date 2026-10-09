@@ -1,0 +1,4 @@
+name: libplctag
+build:
+  cmake: zephyr
+  kconfig: zephyr/Kconfig
