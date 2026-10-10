@@ -109,7 +109,19 @@ the host stack), so Zephyr talks directly to `ab_server` on 127.0.0.1:
            -DCONFIG_PLC_READ_GATEWAY=\"127.0.0.1\" -DCONFIG_PLC_READ_ELEM_COUNT=800
     ./build/zephyr/zephyr.exe
 
-Verified result: a pattern written from Linux
+Protocols: everything the Linux build contains is compiled in: AB/CIP
+(ControlLogix, CompactLogix, Micro800), PCCC (PLC-5, SLC, MicroLogix),
+Omron NJ/NX and Modbus TCP. To use something other than Logix, set
+`CONFIG_PLC_READ_ATTRS` to a full attribute string:
+
+    -DCONFIG_PLC_READ_ATTRS=\"protocol=ab-eip&gateway=127.0.0.1:44819&path=18,127.0.0.1&plc=omron-njnx&elem_size=4&elem_count=4&name=TestDINTArray\"
+    -DCONFIG_PLC_READ_ATTRS=\"protocol=modbus-tcp&gateway=127.0.0.1:1502&path=0&elem_count=4&name=hr10\"
+
+Verified on native_sim with `ab_server --plc=Omron --port=44819` and
+`modbus_server --listen=127.0.0.1:1502`: values written from Linux are read
+back correctly in Zephyr, with 0 errors over 250 reads in each case.
+
+Verified result (Logix): a pattern written from Linux
 (`tag_rw2 --write=11,22,33,-44,55,66,77,123456789`) reads back correctly in
 Zephyr, and 1200+ reads of a 3200 B array complete with 0 errors. RTT on
 native_sim is simulated time and says nothing about real performance. Take
@@ -120,6 +132,7 @@ real numbers only from the board.
 - Not yet tested on the ESP32-P4-ETH hardware against a real Logix (only builds).
 - Reconnect after a cable pull or PLC restart is not tested on Zephyr
   (`test_reconnect*` from `src/tests`).
-- Modbus RTU (serial) is not part of the POSIX layer, and therefore not part of the port.
+- Modbus RTU (serial): upstream libplctag supports only Modbus TCP, so the port does too.
+- Per-protocol Kconfig switches for a smaller binary do not exist yet; everything is linked in.
 - DNS: `gateway=` with a hostname needs `CONFIG_DNS_RESOLVER=y`; an IP literal does not.
 - Next step for the PoC: IIO over USB (libplctag thread → ring buffer in PSRAM → IIO buffer).
