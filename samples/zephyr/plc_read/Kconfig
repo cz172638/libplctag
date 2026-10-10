@@ -26,6 +26,15 @@ config PLC_READ_PERIOD_MS
 	int "Read period in milliseconds (0 = back-to-back)"
 	default 1000
 
+config PLC_READ_ATTRS
+	string "Full libplctag attribute string (overrides the options above)"
+	default ""
+	help
+	  When set, used verbatim for plc_tag_create(), e.g.
+	  "protocol=modbus-tcp&gateway=10.0.0.5:502&path=0&elem_count=10&name=hr0"
+	  or "protocol=ab-eip&gateway=10.0.0.6&path=18,10.0.0.6&plc=omron-njnx&elem_size=4&elem_count=10&name=Arr".
+	  Elements are read as 32-bit integers, except Modbus registers (16-bit).
+
 config PLC_READ_DEBUG
 	int "libplctag debug level (0-5)"
 	default 1

@@ -6,7 +6,9 @@
  */
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -37,9 +39,12 @@ int main(void)
 
 	plc_tag_set_debug_level(CONFIG_PLC_READ_DEBUG);
 
-	printk("creating tag: %s\n", TAG_ATTRS);
+	const char *attrs = sizeof(CONFIG_PLC_READ_ATTRS) > 1 ? CONFIG_PLC_READ_ATTRS : TAG_ATTRS;
+	bool modbus = strstr(attrs, "modbus") != NULL;
 
-	tag = plc_tag_create(TAG_ATTRS, CONFIG_PLC_READ_TIMEOUT_MS);
+	printk("creating tag: %s\n", attrs);
+
+	tag = plc_tag_create(attrs, CONFIG_PLC_READ_TIMEOUT_MS);
 	if (tag < 0) {
 		printk("plc_tag_create failed: %s\n", plc_tag_decode_error(tag));
 		return 0;
@@ -66,13 +71,15 @@ int main(void)
 		n++;
 
 		if (n == 1 && rc == PLCTAG_STATUS_OK) {
-			int cnt = MIN(CONFIG_PLC_READ_ELEM_COUNT, 8);
+			int esz = modbus ? 2 : 4;
+			int cnt = MIN(plc_tag_get_size(tag) / esz, 8);
 
 			printk("first read:");
 			for (int i = 0; i < cnt; i++) {
-				printk(" %" PRId32, plc_tag_get_int32(tag, i * 4));
+				printk(" %" PRId32, modbus ? (int32_t)plc_tag_get_uint16(tag, i * 2)
+							   : plc_tag_get_int32(tag, i * 4));
 			}
-			printk("%s\n", CONFIG_PLC_READ_ELEM_COUNT > 8 ? " ..." : "");
+			printk("%s\n", plc_tag_get_size(tag) / esz > 8 ? " ..." : "");
 		}
 
 		if ((n % STATS_EVERY) == 0) {
