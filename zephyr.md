@@ -35,8 +35,9 @@ Thread stacks: with `CONFIG_DYNAMIC_THREAD`, Zephyr ties the stack to the
 
     zephyr/module.yml            module definition
     zephyr/Kconfig               CONFIG_LIBPLCTAG and options
-    zephyr/CMakeLists.txt        library sources (AB/CIP, PCCC, Omron, Modbus TCP)
+    zephyr/CMakeLists.txt        library sources (AB/CIP + PCCC; Omron, Modbus TCP optional)
     zephyr/zephyr_init.c         optional printk() logger
+    zephyr/proto_stubs.c         stubs for disabled Omron / Modbus
     samples/zephyr/plc_read      sample: array tag read in a loop + RTT statistics
     src/platform/posix/platform.c   __ZEPHYR__ blocks
     src/utils/random_utils.c        __ZEPHYR__ branch
@@ -46,6 +47,8 @@ Thread stacks: with `CONFIG_DYNAMIC_THREAD`, Zephyr ties the stack to the
 | Symbol | Default | Description |
 |---|---|---|
 | `CONFIG_LIBPLCTAG` | n | enables the library; selects POSIX_API, NET_SOCKETS, NET_TCP, NET_SOCKETPAIR, DYNAMIC_THREAD, THREAD_LOCAL_STORAGE |
+| `CONFIG_LIBPLCTAG_OMRON` | n | Omron NJ/NX (`plc=omron-njnx`) |
+| `CONFIG_LIBPLCTAG_MODBUS` | n | Modbus TCP (`protocol=modbus-tcp`) |
 | `CONFIG_LIBPLCTAG_THREAD_STACK_SIZE` | 16384 | stack of each internal thread; upstream asks for 32 KiB, 0 = upstream value |
 | `CONFIG_LIBPLCTAG_DEBUG_PRINTK` | y | libplctag debug output (`debug=N`) goes to printk |
 
@@ -65,7 +68,7 @@ Memory:
   On the ESP32-P4 it defaults to -1 (all remaining SRAM). On native_sim the default is
   only 16 KiB, which is too small: Large Forward Open needs a 4 KiB buffer and fails
   with `Unable to increase request buffer size to 4044 bytes`.
-- ESP32-P4-ETH, sample build: SRAM 241 KB / 384 KB (61 %), flash 584 KB.
+- ESP32-P4-ETH, sample build: SRAM 240 KB / 384 KB (61 %), flash 496 KB (without Omron/Modbus).
   PSRAM (32 MB) is still free for the sample ring buffer.
 
 FDs: each connection uses 3 (the TCP socket plus the socketpair).
@@ -109,16 +112,25 @@ the host stack), so Zephyr talks directly to `ab_server` on 127.0.0.1:
            -DCONFIG_PLC_READ_GATEWAY=\"127.0.0.1\" -DCONFIG_PLC_READ_ELEM_COUNT=800
     ./build/zephyr/zephyr.exe
 
-Protocols: everything the Linux build contains is compiled in: AB/CIP
-(ControlLogix, CompactLogix, Micro800), PCCC (PLC-5, SLC, MicroLogix),
-Omron NJ/NX and Modbus TCP. To use something other than Logix, set
-`CONFIG_PLC_READ_ATTRS` to a full attribute string:
+Protocols: AB EtherNet/IP (CIP: ControlLogix, CompactLogix, Micro800) and
+PCCC (PLC-5, SLC 500, MicroLogix, `lgxpccc`) are always built. Omron NJ/NX
+and Modbus TCP are off by default (`CONFIG_LIBPLCTAG_OMRON`,
+`CONFIG_LIBPLCTAG_MODBUS`). The library core calls their
+init/teardown/tag_create unconditionally, so a disabled module is replaced
+by a no-op stub (`zephyr/proto_stubs.c`) rather than patched out of
+`init.c`/`lib.c`, and creating such a tag returns `PLCTAG_ERR_CREATE`.
+Leaving both off saves about 88 KB of flash (ESP32-P4 sample: 584 → 496 KB).
+
+The sample takes a full attribute string in `CONFIG_PLC_READ_ATTRS`:
+
+    -DCONFIG_PLC_READ_ATTRS=\"protocol=ab-eip&gateway=127.0.0.1:44820&path=1,0&plc=lgxpccc&elem_size=2&elem_count=4&name=N7:0\"
 
     -DCONFIG_PLC_READ_ATTRS=\"protocol=ab-eip&gateway=127.0.0.1:44819&path=18,127.0.0.1&plc=omron-njnx&elem_size=4&elem_count=4&name=TestDINTArray\"
     -DCONFIG_PLC_READ_ATTRS=\"protocol=modbus-tcp&gateway=127.0.0.1:1502&path=0&elem_count=4&name=hr10\"
 
-Verified on native_sim with `ab_server --plc=Omron --port=44819` and
-`modbus_server --listen=127.0.0.1:1502`: values written from Linux are read
+Verified on native_sim: PCCC with `ab_server --plc=LgxPccc --tag=N7[10]`.
+With the options enabled, Omron with `ab_server --plc=Omron --port=44819` and
+Modbus with `modbus_server --listen=127.0.0.1:1502`: values written from Linux are read
 back correctly in Zephyr, with 0 errors over 250 reads in each case.
 
 Verified result (Logix): a pattern written from Linux
@@ -133,6 +145,5 @@ real numbers only from the board.
 - Reconnect after a cable pull or PLC restart is not tested on Zephyr
   (`test_reconnect*` from `src/tests`).
 - Modbus RTU (serial): upstream libplctag supports only Modbus TCP, so the port does too.
-- Per-protocol Kconfig switches for a smaller binary do not exist yet; everything is linked in.
 - DNS: `gateway=` with a hostname needs `CONFIG_DNS_RESOLVER=y`; an IP literal does not.
 - Next step for the PoC: IIO over USB (libplctag thread → ring buffer in PSRAM → IIO buffer).
