@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <zephyr/kernel.h>
@@ -40,7 +41,13 @@ int main(void)
 	plc_tag_set_debug_level(CONFIG_PLC_READ_DEBUG);
 
 	const char *attrs = sizeof(CONFIG_PLC_READ_ATTRS) > 1 ? CONFIG_PLC_READ_ATTRS : TAG_ATTRS;
-	bool modbus = strstr(attrs, "modbus") != NULL;
+	/* element width for printing: Modbus registers and PCCC N files are 16-bit */
+	const char *es = strstr(attrs, "elem_size=");
+	int esz = strstr(attrs, "modbus") ? 2 : (es ? atoi(es + 10) : 4);
+
+	if (esz != 2 && esz != 4) {
+		esz = 4;
+	}
 
 	printk("creating tag: %s\n", attrs);
 
@@ -71,13 +78,12 @@ int main(void)
 		n++;
 
 		if (n == 1 && rc == PLCTAG_STATUS_OK) {
-			int esz = modbus ? 2 : 4;
 			int cnt = MIN(plc_tag_get_size(tag) / esz, 8);
 
 			printk("first read:");
 			for (int i = 0; i < cnt; i++) {
-				printk(" %" PRId32, modbus ? (int32_t)plc_tag_get_uint16(tag, i * 2)
-							   : plc_tag_get_int32(tag, i * 4));
+				printk(" %" PRId32, esz == 2 ? (int32_t)plc_tag_get_int16(tag, i * 2)
+							 : plc_tag_get_int32(tag, i * 4));
 			}
 			printk("%s\n", plc_tag_get_size(tag) / esz > 8 ? " ..." : "");
 		}

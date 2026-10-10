@@ -30,14 +30,6 @@ zephyr_library_sources(
   ${LPT_LIB}/protocols/ab/pccc.c
   ${LPT_LIB}/protocols/ab/session.c
 
-  ${LPT_LIB}/protocols/omron/cip.c
-  ${LPT_LIB}/protocols/omron/conn.c
-  ${LPT_LIB}/protocols/omron/omron_common.c
-  ${LPT_LIB}/protocols/omron/omron_connection_tag.c
-  ${LPT_LIB}/protocols/omron/omron_raw_tag.c
-  ${LPT_LIB}/protocols/omron/omron_standard_tag.c
-
-  ${LPT_LIB}/protocols/mb/modbus.c
   ${LPT_LIB}/protocols/system/system.c
 
   ${LPT_SRC}/utils/atomic_utils.c
@@ -52,6 +44,25 @@ zephyr_library_sources(
 
   ${LPT_SRC}/platform/posix/platform.c
 )
+
+zephyr_library_sources_ifdef(CONFIG_LIBPLCTAG_OMRON
+  ${LPT_LIB}/protocols/omron/cip.c
+  ${LPT_LIB}/protocols/omron/conn.c
+  ${LPT_LIB}/protocols/omron/omron_common.c
+  ${LPT_LIB}/protocols/omron/omron_connection_tag.c
+  ${LPT_LIB}/protocols/omron/omron_raw_tag.c
+  ${LPT_LIB}/protocols/omron/omron_standard_tag.c
+)
+
+zephyr_library_sources_ifdef(CONFIG_LIBPLCTAG_MODBUS
+  ${LPT_LIB}/protocols/mb/modbus.c
+)
+
+# init.c, lib.c and ab_common.c reference the optional modules directly:
+# link no-op stubs for the disabled ones instead of patching the core.
+if(NOT CONFIG_LIBPLCTAG_OMRON OR NOT CONFIG_LIBPLCTAG_MODBUS)
+  zephyr_library_sources(${CMAKE_CURRENT_LIST_DIR}/proto_stubs.c)
+endif()
 
 zephyr_library_sources_ifdef(CONFIG_LIBPLCTAG_DEBUG_PRINTK
   ${CMAKE_CURRENT_LIST_DIR}/zephyr_init.c

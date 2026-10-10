@@ -27,6 +27,20 @@ config LIBPLCTAG
 
 if LIBPLCTAG
 
+comment "Allen-Bradley EtherNet/IP (CIP: ControlLogix, CompactLogix, Micro800) and PCCC (PLC-5, SLC 500, MicroLogix) are always built"
+
+config LIBPLCTAG_OMRON
+	bool "Omron NJ/NX (CIP) support"
+	help
+	  Build the Omron NJ/NX protocol module (plc=omron-njnx).  When
+	  disabled, creating such a tag fails with PLCTAG_ERR_CREATE.
+
+config LIBPLCTAG_MODBUS
+	bool "Modbus TCP support"
+	help
+	  Build the Modbus TCP protocol module (protocol=modbus-tcp).  When
+	  disabled, creating such a tag fails with PLCTAG_ERR_CREATE.
+
 config LIBPLCTAG_THREAD_STACK_SIZE
 	int "Stack size of libplctag internal threads"
 	default 16384
